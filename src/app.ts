@@ -28,6 +28,7 @@ import { initializeOperationRegistry } from './operationDefinitions';
 import { setServerUrlMiddleware } from './router/middlewares/setServerUrl';
 import { setTenantIdMiddleware } from './router/middlewares/setTenantId';
 import { setContentTypeMiddleware } from './router/middlewares/setContentType';
+import { setRequestIdMiddleware } from './router/middlewares/setRequestId';
 
 const configVersionSupported: ConfigVersion = 1;
 
@@ -84,6 +85,7 @@ export function generateServerlessRouter(
 
     mainRouter.use(setServerUrlMiddleware(fhirConfig));
     mainRouter.use(setContentTypeMiddleware);
+    mainRouter.use(setRequestIdMiddleware);
 
     // Metadata
     const metadataRoute: MetadataRoute = new MetadataRoute(

@@ -32,4 +32,15 @@ describe('generateServerlessRouter', () => {
         const res = await requestWithSupertest.post('/test', {}).set('Content-Type', 'application/json');
         expect(res.headers['content-type']).toEqual('application/json; charset=utf-8');
     });
+
+    ['get', 'post', 'patch', 'delete', 'put', 'options', 'head'].forEach((verb: string)=>{
+        test(`${verb} request should return unique ID`, async ()=>{
+            app.all('/test', async (req: express.Request, res: express.Response) => {
+                res.send({ data: 'test' });
+            });
+            const res = await requestWithSupertest[verb]('/test', {});
+            expect(res.headers['x-request-id']).toBeDefined();
+            expect(res.headers['x-request-id']).toMatch(/^[a-z,0-9,-]{36,36}$/);
+        });
+    });
 });
