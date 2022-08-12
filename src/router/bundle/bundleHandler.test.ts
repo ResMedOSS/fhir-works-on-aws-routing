@@ -25,6 +25,7 @@ import { uuidRegExp, utcTimeRegExp } from '../../regExpressions';
 import r4FhirConfigGeneric from '../../../sampleData/r4FhirConfigGeneric';
 import ConfigHandler from '../../configHandler';
 import JsonSchemaValidator from '../validation/jsonSchemaValidator';
+import OperationBroker from '../__mocks__/broker';
 
 const sampleBundleRequestJSON = {
     resourceType: 'Bundle',
@@ -350,6 +351,7 @@ const bundleHandlerR4 = new BundleHandler(
     'https://API_URL.com',
     stubs.passThroughAuthz,
     getSupportedGenericResources(genericResource, SUPPORTED_R4_RESOURCES, '4.0.1'),
+    new OperationBroker(),
     genericResource,
     resources,
 );
@@ -360,6 +362,7 @@ const bundleHandlerSTU3 = new BundleHandler(
     'https://API_URL.com',
     stubs.passThroughAuthz,
     getSupportedGenericResources(genericResource, SUPPORTED_STU3_RESOURCES, '3.0.1'),
+    new OperationBroker(),
     genericResource,
     resources,
 );
@@ -797,6 +800,7 @@ describe('ERROR Cases: Bundle not authorized', () => {
             'https://API_URL.com',
             authZ,
             getSupportedGenericResources(genericResource, SUPPORTED_R4_RESOURCES, '4.0.1'),
+            new OperationBroker(),
             genericResource,
             resources,
         );
@@ -853,6 +857,7 @@ describe('ERROR Cases: Bundle not authorized', () => {
             'https://API_URL.com',
             authZ,
             getSupportedGenericResources(genericResource, SUPPORTED_R4_RESOURCES, '4.0.1'),
+            new OperationBroker(),
             genericResource,
             resources,
         );
@@ -973,6 +978,7 @@ describe('SERVER-CAPABILITIES Cases: Validating Bundle request is allowed given 
                 'https://API_URL.com',
                 stubs.passThroughAuthz,
                 getSupportedGenericResources(genericResourceReadOnly, supportedResource, version),
+                new OperationBroker(),
                 genericResourceReadOnly,
                 resources,
             );
@@ -1010,6 +1016,7 @@ describe('SERVER-CAPABILITIES Cases: Validating Bundle request is allowed given 
                 'https://API_URL.com',
                 stubs.passThroughAuthz,
                 getSupportedGenericResources(genericResourceExcludePatient, supportedResource, version),
+                new OperationBroker(),
                 genericResourceExcludePatient,
                 resources,
             );
@@ -1059,6 +1066,7 @@ describe('SERVER-CAPABILITIES Cases: Validating Bundle request is allowed given 
                 'https://API_URL.com',
                 stubs.passThroughAuthz,
                 getSupportedGenericResources(genericResourceExcludePatient, supportedResource, version),
+                new OperationBroker(),
                 genericResourceExcludePatient,
                 patientResource,
             );
@@ -1090,6 +1098,7 @@ describe('SERVER-CAPABILITIES Cases: Validating Bundle request is allowed given 
                 'https://API_URL.com',
                 stubs.passThroughAuthz,
                 getSupportedGenericResources(genericResourceNoExclusion, supportedResource, version),
+                new OperationBroker(),
                 genericResourceNoExclusion,
                 {},
             );

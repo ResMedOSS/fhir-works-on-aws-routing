@@ -8,6 +8,7 @@ import {
     Search,
     stubs as fwoaStubs,
 } from 'fhir-works-on-aws-interface';
+import OperationBroker from '../src/router/__mocks__/broker';
 
 const config = (stubs: {
     bundle: Bundle;
@@ -63,6 +64,7 @@ const config = (stubs: {
             },
         },
     },
+    operationBroker: new OperationBroker(),
 });
 
 const configFn = (overrideStubs?: any) => {

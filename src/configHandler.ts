@@ -84,6 +84,7 @@ export default class ConfigHandler {
                 this.config.auth.authorization,
                 this.config.server.url,
                 this.config.validators,
+                this.config.operationBroker,
             );
         }
 
@@ -100,6 +101,7 @@ export default class ConfigHandler {
                 this.config.auth.authorization,
                 this.config.server.url,
                 this.config.validators,
+                this.config.operationBroker,
             );
         }
 

@@ -13,6 +13,7 @@ import {
     GenericResource,
     Resources,
     Validator,
+    OperationBroker,
 } from 'fhir-works-on-aws-interface';
 import createError from 'http-errors';
 import BundleHandler from '../bundle/bundleHandler';
@@ -39,6 +40,7 @@ export default class RootRoute {
         history: History,
         authService: Authorization,
         supportedGenericResources: string[],
+        broker: OperationBroker,
         genericResource?: GenericResource,
         resources?: Resources,
     ) {
@@ -50,11 +52,12 @@ export default class RootRoute {
             serverUrl,
             authService,
             supportedGenericResources,
+            broker,
             genericResource,
             resources,
         );
         this.authService = authService;
-        this.rootHandler = new RootHandler(search, history, authService, serverUrl);
+        this.rootHandler = new RootHandler(search, history, authService, serverUrl, broker);
         this.init();
     }
 

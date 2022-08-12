@@ -15,6 +15,7 @@ import {
     isUnauthorizedError,
     Validator,
     RequestContext,
+    OperationBroker,
 } from 'fhir-works-on-aws-interface';
 import createError from 'http-errors';
 import isEmpty from 'lodash/isEmpty';
@@ -39,12 +40,15 @@ export default class BundleHandler implements BundleHandlerInterface {
 
     private supportedGenericResources: string[];
 
+    private broker: OperationBroker;
+
     constructor(
         bundleService: Bundle,
         validators: Validator[],
         serverUrl: string,
         authService: Authorization,
         supportedGenericResources: string[],
+        broker: OperationBroker,
         genericResource?: GenericResource,
         resources?: Resources,
     ) {
@@ -53,6 +57,7 @@ export default class BundleHandler implements BundleHandlerInterface {
         this.authService = authService;
         this.supportedGenericResources = supportedGenericResources;
         this.genericResource = genericResource;
+        this.broker = broker;
         this.resources = resources;
 
         this.validators = validators;
@@ -75,7 +80,32 @@ export default class BundleHandler implements BundleHandlerInterface {
             tenantId,
         );
 
-        let bundleServiceResponse = await this.bundleService.batch({ requests, startTime, tenantId });
+        const request = { requests, startTime, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-batch',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        let bundleServiceResponse = await this.bundleService.batch(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: bundleServiceResponse,
+            operation: 'post-batch',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         bundleServiceResponse = await this.filterBundleResult(
             bundleServiceResponse,
             requests,
@@ -145,7 +175,32 @@ export default class BundleHandler implements BundleHandlerInterface {
             );
         }
 
-        let bundleServiceResponse = await this.bundleService.transaction({ requests, startTime, tenantId });
+        const request = { requests, startTime, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-transaction',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        let bundleServiceResponse = await this.bundleService.transaction(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: bundleServiceResponse,
+            operation: 'post-transaction',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         bundleServiceResponse = await this.filterBundleResult(
             bundleServiceResponse,
             requests,

@@ -11,6 +11,7 @@ import {
     KeyValueMap,
     Validator,
     RequestContext,
+    OperationBroker,
 } from 'fhir-works-on-aws-interface';
 import BundleGenerator from '../bundle/bundleGenerator';
 import CrudHandlerInterface from './CrudHandlerInterface';
@@ -29,6 +30,8 @@ export default class ResourceHandler implements CrudHandlerInterface {
 
     private authService: Authorization;
 
+    private broker: OperationBroker;
+
     constructor(
         dataService: Persistence,
         searchService: Search,
@@ -36,31 +39,108 @@ export default class ResourceHandler implements CrudHandlerInterface {
         authService: Authorization,
         serverUrl: string,
         validators: Validator[],
+        broker: OperationBroker,
     ) {
         this.validators = validators;
         this.dataService = dataService;
         this.searchService = searchService;
         this.historyService = historyService;
         this.authService = authService;
+        this.broker = broker;
     }
 
-    async create(resourceType: string, resource: any, tenantId?: string) {
+    async create(resourceType: string, resource: any, userIdentity: KeyValueMap, tenantId?: string) {
         await validateResource(this.validators, resource, { tenantId, typeOperation: 'create' });
 
-        const createResponse = await this.dataService.createResource({ resourceType, resource, tenantId });
+        const request = { resourceType, resource, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-create',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const createResponse = await this.dataService.createResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: createResponse,
+            operation: 'post-create',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return createResponse.resource;
     }
 
-    async update(resourceType: string, id: string, resource: any, tenantId?: string) {
+    async update(resourceType: string, id: string, resource: any, userIdentity: KeyValueMap, tenantId?: string) {
         await validateResource(this.validators, resource, { tenantId, typeOperation: 'update' });
 
-        const updateResponse = await this.dataService.updateResource({ resourceType, id, resource, tenantId });
+        const request = { resourceType, id, resource, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-update',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const updateResponse = await this.dataService.updateResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: updateResponse,
+            operation: 'post-update',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return updateResponse.resource;
     }
 
-    async patch(resourceType: string, id: string, resource: any, tenantId?: string) {
+    async patch(resourceType: string, id: string, resource: any, userIdentity: KeyValueMap, tenantId?: string) {
         // TODO Add request validation around patching
-        const patchResponse = await this.dataService.patchResource({ resourceType, id, resource, tenantId });
+
+        const request = { resourceType, id, resource, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-patch',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const patchResponse = await this.dataService.patchResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: patchResponse,
+            operation: 'post-patch',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
 
         return patchResponse.resource;
     }
@@ -87,7 +167,7 @@ export default class ResourceHandler implements CrudHandlerInterface {
             fhirServiceBaseUrl: serverUrl,
         });
 
-        const searchResponse = await this.searchService.typeSearch({
+        const request = {
             resourceType,
             queryParams,
             baseUrl: serverUrl,
@@ -95,7 +175,32 @@ export default class ResourceHandler implements CrudHandlerInterface {
             searchFilters,
             tenantId,
             sessionId: hash(userIdentity),
+        };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-search-type',
         });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const searchResponse = await this.searchService.typeSearch(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: searchResponse,
+            operation: 'post-search-type',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         const bundle = BundleGenerator.generateBundle(
             serverUrl,
             queryParams,
@@ -129,13 +234,38 @@ export default class ResourceHandler implements CrudHandlerInterface {
             fhirServiceBaseUrl: serverUrl,
         });
 
-        const historyResponse = await this.historyService.typeHistory({
+        const request = {
             resourceType,
             queryParams,
             baseUrl: serverUrl,
             searchFilters,
             tenantId,
+        };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-history-type',
         });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const historyResponse = await this.historyService.typeHistory(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: historyResponse,
+            operation: 'post-history-type',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return BundleGenerator.generateBundle(serverUrl, queryParams, historyResponse.result, 'history', resourceType);
     }
 
@@ -157,14 +287,39 @@ export default class ResourceHandler implements CrudHandlerInterface {
             fhirServiceBaseUrl: serverUrl,
         });
 
-        const historyResponse = await this.historyService.instanceHistory({
+        const request = {
             id,
             resourceType,
             queryParams,
             baseUrl: serverUrl,
             searchFilters,
             tenantId,
+        };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-history-instance',
         });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const historyResponse = await this.historyService.instanceHistory(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: historyResponse,
+            operation: 'post-history-instance',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return BundleGenerator.generateBundle(
             serverUrl,
             queryParams,
@@ -175,18 +330,93 @@ export default class ResourceHandler implements CrudHandlerInterface {
         );
     }
 
-    async read(resourceType: string, id: string, tenantId?: string) {
-        const getResponse = await this.dataService.readResource({ resourceType, id, tenantId });
+    async read(resourceType: string, id: string, userIdentity: KeyValueMap, tenantId?: string) {
+        const request = { resourceType, id, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-read',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const getResponse = await this.dataService.readResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: getResponse,
+            operation: 'post-read',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return getResponse.resource;
     }
 
-    async vRead(resourceType: string, id: string, vid: string, tenantId?: string) {
-        const getResponse = await this.dataService.vReadResource({ resourceType, id, vid, tenantId });
+    async vRead(resourceType: string, id: string, vid: string, userIdentity: KeyValueMap, tenantId?: string) {
+        const request = { resourceType, id, vid, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-vread',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const getResponse = await this.dataService.vReadResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: getResponse,
+            operation: 'post-vread',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return getResponse.resource;
     }
 
-    async delete(resourceType: string, id: string, tenantId?: string) {
-        await this.dataService.deleteResource({ resourceType, id, tenantId });
+    async delete(resourceType: string, id: string, userIdentity: KeyValueMap, tenantId?: string) {
+        const request = { resourceType, id, tenantId };
+        const preHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            operation: 'pre-delete',
+        });
+
+        if (!preHookResponse.success) {
+            throw new Error(JSON.stringify(preHookResponse.errors));
+        }
+
+        const deleteResponse = await this.dataService.deleteResource(request);
+
+        const postHookResponse = await this.broker.publish({
+            userIdentity,
+            timeStamp: new Date(),
+            request,
+            response: deleteResponse,
+            operation: 'post-delete',
+        });
+
+        if (!postHookResponse.success) {
+            throw new Error(JSON.stringify(postHookResponse.errors));
+        }
+
         return OperationsGenerator.generateSuccessfulDeleteOperation();
     }
 }

@@ -26,6 +26,7 @@ import {
     GetExportStatusResponse,
     RequestContext,
 } from 'fhir-works-on-aws-interface';
+import * as sinon from 'sinon';
 import ResourceHandler from './resourceHandler';
 import invalidPatient from '../../../sampleData/invalidV4Patient.json';
 import validPatient from '../../../sampleData/validV4Patient.json';
@@ -34,6 +35,7 @@ import OperationsGenerator from '../operationsGenerator';
 import ElasticSearchService from '../__mocks__/elasticSearchService';
 import DynamoDbDataService from '../__mocks__/dynamoDbDataService';
 import JsonSchemaValidator from '../validation/jsonSchemaValidator';
+import OperationBroker from '../__mocks__/broker';
 
 const enum SEARCH_PAGINATION_PARAMS {
     PAGES_OFFSET = '_getpagesoffset',
@@ -49,6 +51,15 @@ const dummyRequestContext: RequestContext = {
 };
 
 describe('SUCCESS CASES: Testing create, read, update, delete of resources', () => {
+    const sandbox = sinon.createSandbox();
+    const broker = new OperationBroker();
+    sandbox.stub(broker, 'publish').resolves({
+        success: true,
+        responses: [],
+        errors: [],
+    });
+    sandbox.stub(broker, 'subscribe');
+    sandbox.stub(broker, 'unsubscribe');
     const resourceHandler = new ResourceHandler(
         DynamoDbDataService,
         ElasticSearchService,
@@ -56,7 +67,19 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         stubs.passThroughAuthz,
         'https://API_URL.com',
         [new JsonSchemaValidator('4.0.1')],
+        broker,
     );
+
+    beforeEach(async () => {
+        // stub out the implementation for unit testing
+        sandbox.reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+    });
 
     test('create: patient', async () => {
         // BUILD
@@ -66,7 +89,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         delete expectedValidPatient.id;
 
         // OPERATE
-        const createResponse = await resourceHandler.create('Patient', validPatient);
+        const createResponse = await resourceHandler.create('Patient', validPatient, {});
 
         // CHECK
         // TODO spy on DS and ensure ID being passed in is not the expectedValidPatient.id
@@ -76,6 +99,81 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expect(createResponse.meta.lastUpdated).toBeDefined();
         delete createResponse.meta;
         expect(createResponse).toMatchObject(expectedValidPatient);
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-create');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-create');
+    });
+
+    test('pre-create hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'createResource');
+
+        // BUILD
+        const expectedValidPatient = { ...validPatient } as any;
+
+        // The patient that was created has a randomly generated id, which will not match the expectedValidPatient's id
+        delete expectedValidPatient.id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.create('Patient', validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-create hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'createResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const expectedValidPatient = { ...validPatient } as any;
+
+        // The patient that was created has a randomly generated id, which will not match the expectedValidPatient's id
+        delete expectedValidPatient.id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.create('Patient', validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 
     test('get: patient', async () => {
@@ -85,7 +183,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expectedValidPatient.id = id;
 
         // OPERATE
-        const getResponse: any = await resourceHandler.read('Patient', id);
+        const getResponse: any = await resourceHandler.read('Patient', id, {});
 
         // CHECK
         expect(getResponse.meta).toBeDefined();
@@ -93,6 +191,80 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expect(getResponse.meta.lastUpdated).toBeDefined();
         delete getResponse.meta;
         expect(getResponse).toMatchObject(expectedValidPatient);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-read');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-read');
+    });
+
+    test('pre-read hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'readResource');
+
+        // BUILD
+        const id = uuidv4();
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.read('Patient', id, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-read hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'readResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const id = uuidv4();
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.read('Patient', id, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 
     test('vread: patient', async () => {
@@ -103,7 +275,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expectedValidPatient.id = id;
 
         // OPERATE
-        const getResponse: any = await resourceHandler.vRead('Patient', id, vid);
+        const getResponse: any = await resourceHandler.vRead('Patient', id, vid, {});
 
         // CHECK
         expect(getResponse.meta).toBeDefined();
@@ -111,6 +283,82 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expect(getResponse.meta.lastUpdated).toBeDefined();
         delete getResponse.meta;
         expect(getResponse).toMatchObject(expectedValidPatient);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-vread');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-vread');
+    });
+
+    test('pre-vread hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'vReadResource');
+
+        // BUILD
+        const id = uuidv4();
+        const vid = '1';
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.vRead('Patient', id, vid, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-vread hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'vReadResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const id = uuidv4();
+        const vid = '1';
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.vRead('Patient', id, vid, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 
     test('update: patient', async () => {
@@ -120,7 +368,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expectedValidPatient.id = id;
 
         // OPERATE
-        const updateResponse = await resourceHandler.update('Patient', id, validPatient);
+        const updateResponse = await resourceHandler.update('Patient', id, validPatient, {});
 
         // CHECK
         // TODO spy on DS and ensure ID being passed in is the expectedValidPatient.id & versionId is set to 2
@@ -130,6 +378,81 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expect(updateResponse.meta.lastUpdated).toBeDefined();
         delete updateResponse.meta;
         expect(updateResponse).toMatchObject(expectedValidPatient);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-update');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-update');
+    });
+
+    test('pre-update hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'updateResource');
+
+        // BUILD
+        const id = uuidv4();
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.update('Patient', id, validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-update hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'updateResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const id = uuidv4();
+        const vid = '1';
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.update('Patient', id, validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 
     test('patch: patient', async () => {
@@ -139,7 +462,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expectedValidPatient.id = id;
 
         // OPERATE
-        const patchResponse = await resourceHandler.patch('Patient', id, validPatient);
+        const patchResponse = await resourceHandler.patch('Patient', id, validPatient, {});
 
         // CHECK
         // TODO spy on DS and ensure ID being passed in is the expectedValidPatient.id & versionId is set to 2
@@ -149,15 +472,159 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources', () 
         expect(patchResponse.meta.lastUpdated).toBeDefined();
         delete patchResponse.meta;
         expect(patchResponse).toMatchObject(expectedValidPatient);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-patch');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-patch');
+    });
+
+    test('pre-patch hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'patchResource');
+
+        // BUILD
+        const id = uuidv4();
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.patch('Patient', id, validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-patch hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'patchResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const id = uuidv4();
+        const expectedValidPatient = { ...validPatient };
+        expectedValidPatient.id = id;
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.patch('Patient', id, validPatient, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 
     test('delete: patient', async () => {
         // BUILD
         const id = uuidv4();
         // OPERATE
-        const deleteResponse = await resourceHandler.delete('Patient', id);
+        const deleteResponse = await resourceHandler.delete('Patient', id, {});
         // CHECK
         expect(deleteResponse).toEqual(OperationsGenerator.generateSuccessfulDeleteOperation(1));
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-delete');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-delete');
+    });
+
+    test('pre-delete hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('pre hook subscriber failed')],
+        });
+
+        const persistenceSpy = sandbox.spy(DynamoDbDataService, 'deleteResource');
+
+        // BUILD
+        const id = uuidv4();
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.delete('Patient', id, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceSpy.called).toBeFalsy();
+
+        // CLEANUP
+        persistenceSpy.restore();
+    });
+
+    test('post-delete hook not successful throws', async () => {
+        (broker.publish as sinon.SinonStub).reset();
+
+        (broker.publish as sinon.SinonStub).onCall(0).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
+        (broker.publish as sinon.SinonStub).onCall(1).resolves({
+            success: false,
+            responses: [],
+            errors: [new Error('post hook subscriber failed')],
+        });
+
+        const persistenceStub = sandbox.stub(DynamoDbDataService, 'deleteResource').resolves({
+            message: 'success',
+            resource: {},
+        });
+
+        // BUILD
+        const id = uuidv4();
+
+        // OPERATE
+        let threw = false;
+        try {
+            await resourceHandler.delete('Patient', id, {});
+        } catch (e) {
+            threw = true;
+        }
+
+        expect(threw).toBeTruthy();
+        expect(persistenceStub.called).toBeTruthy();
+
+        // CLEANUP
+        persistenceStub.restore();
     });
 });
 describe('ERROR CASES: Testing create, read, update, delete of resources', () => {
@@ -244,6 +711,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         stubs.passThroughAuthz,
         'https://API_URL.com',
         [new JsonSchemaValidator('4.0.1')],
+        new OperationBroker(),
     );
 
     beforeEach(() => {
@@ -255,7 +723,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         // BUILD
         try {
             // OPERATE
-            await resourceHandler.create('Patient', invalidPatient);
+            await resourceHandler.create('Patient', invalidPatient, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(
@@ -270,7 +738,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         // BUILD
         try {
             // OPERATE
-            await resourceHandler.create('Patient', validPatient);
+            await resourceHandler.create('Patient', validPatient, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(dbError);
@@ -282,7 +750,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const id = uuidv4();
         try {
             // OPERATE
-            await resourceHandler.update('Patient', id, invalidPatient);
+            await resourceHandler.update('Patient', id, invalidPatient, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(
@@ -298,7 +766,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const id = uuidv4();
         try {
             // OPERATE
-            await resourceHandler.update('Patient', id, validPatient);
+            await resourceHandler.update('Patient', id, validPatient, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(new ResourceNotFoundError('Patient', id));
@@ -310,7 +778,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const id = uuidv4();
         try {
             // OPERATE
-            await resourceHandler.patch('Patient', id, validPatient);
+            await resourceHandler.patch('Patient', id, validPatient, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(dbError);
@@ -322,7 +790,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const id = uuidv4();
         try {
             // OPERATE
-            await resourceHandler.read('Patient', id);
+            await resourceHandler.read('Patient', id, {});
         } catch (e) {
             // CHECK
             console.log(e);
@@ -336,7 +804,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const vid = '1';
         try {
             // OPERATE
-            await resourceHandler.vRead('Patient', id, vid);
+            await resourceHandler.vRead('Patient', id, vid, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(new ResourceVersionNotFoundError('Patient', id, vid));
@@ -348,7 +816,7 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
         const id = uuidv4();
         try {
             // OPERATE
-            await resourceHandler.delete('Patient', id);
+            await resourceHandler.delete('Patient', id, {});
         } catch (e) {
             // CHECK
             expect(e).toEqual(new ResourceNotFoundError('Patient', id));
@@ -357,6 +825,15 @@ describe('ERROR CASES: Testing create, read, update, delete of resources', () =>
 });
 
 describe('Testing search', () => {
+    const sandbox = sinon.createSandbox();
+    const broker = new OperationBroker();
+    sandbox.stub(broker, 'publish').resolves({
+        success: true,
+        responses: [],
+        errors: [],
+    });
+    sandbox.stub(broker, 'subscribe');
+    sandbox.stub(broker, 'unsubscribe');
     const initializeResourceHandler = (searchServiceResponse?: SearchResponse) => {
         ElasticSearchService.typeSearch = jest.fn().mockReturnValue(Promise.resolve(searchServiceResponse));
 
@@ -367,6 +844,7 @@ describe('Testing search', () => {
             stubs.passThroughAuthz,
             'https://API_URL.com',
             [new JsonSchemaValidator('4.0.1')],
+            broker,
         );
 
         return resourceHandler;
@@ -375,6 +853,15 @@ describe('Testing search', () => {
     beforeEach(() => {
         // Ensures that for each test, we test the assertions in the catch block
         expect.hasAssertions();
+
+        // stub out the implementation for unit testing
+        sandbox.reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
     });
 
     test('Search for a patient that exist', async () => {
@@ -445,6 +932,10 @@ describe('Testing search', () => {
                 resource: validPatient,
             },
         ]);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-search-type');
     });
 
     test('Search for a patient that does NOT exist', async () => {
@@ -479,6 +970,10 @@ describe('Testing search', () => {
         ]);
 
         expect(searchResponse.entry).toEqual([]);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-search-type');
     });
 
     test('Search for a patient fails', async () => {
@@ -499,6 +994,9 @@ describe('Testing search', () => {
             // CHECK
             expect(e).toEqual(new Error('Boom!!'));
         }
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(1);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
     });
 
     describe('Pagination', () => {
@@ -559,6 +1057,10 @@ describe('Testing search', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-search-type');
         });
         test('Pagination with a previous page link', async () => {
             // BUILD
@@ -617,6 +1119,10 @@ describe('Testing search', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-search-type');
         });
         test('Pagination with a previous page link and a next page link', async () => {
             // BUILD
@@ -679,10 +1185,23 @@ describe('Testing search', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-search-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-search-type');
         });
     });
 });
 describe('Testing history', () => {
+    const sandbox = sinon.createSandbox();
+    const broker = new OperationBroker();
+    sandbox.stub(broker, 'publish').resolves({
+        success: true,
+        responses: [],
+        errors: [],
+    });
+    sandbox.stub(broker, 'subscribe');
+    sandbox.stub(broker, 'unsubscribe');
     const initializeResourceHandler = (searchServiceResponse?: SearchResponse) => {
         stubs.history.typeHistory = jest.fn().mockReturnValue(Promise.resolve(searchServiceResponse));
         stubs.history.instanceHistory = jest.fn().mockReturnValue(Promise.resolve(searchServiceResponse));
@@ -694,6 +1213,7 @@ describe('Testing history', () => {
             stubs.passThroughAuthz,
             'https://API_URL.com',
             [new JsonSchemaValidator('4.0.1')],
+            broker,
         );
 
         return resourceHandler;
@@ -702,6 +1222,15 @@ describe('Testing history', () => {
     beforeEach(() => {
         // Ensures that for each test, we test the assertions in the catch block
         expect.hasAssertions();
+
+        // stub out the implementation for unit testing
+        sandbox.reset();
+
+        (broker.publish as sinon.SinonStub).resolves({
+            success: true,
+            responses: [],
+            errors: [],
+        });
     });
 
     test('History for a patient that exist', async () => {
@@ -752,6 +1281,10 @@ describe('Testing history', () => {
                 resource: validPatient,
             },
         ]);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-type');
     });
 
     test('History for a patient that does NOT exist', async () => {
@@ -786,6 +1319,10 @@ describe('Testing history', () => {
         ]);
 
         expect(searchResponse.entry).toEqual([]);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-type');
     });
 
     test('History type for a patient fails', async () => {
@@ -806,6 +1343,9 @@ describe('Testing history', () => {
             // CHECK
             expect(e).toEqual(new Error('Boom!!'));
         }
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(1);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
     });
 
     test('Instance History for a patient returns a Patient', async () => {
@@ -857,6 +1397,10 @@ describe('Testing history', () => {
                 resource: validPatient,
             },
         ]);
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-instance');
+        expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-instance');
     });
 
     test('Instance History for a patient fails', async () => {
@@ -877,6 +1421,9 @@ describe('Testing history', () => {
             // CHECK
             expect(e).toEqual(new Error('Boom!!'));
         }
+
+        expect((broker.publish as sinon.SinonStub).callCount).toBe(1);
+        expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-instance');
     });
 
     describe('Pagination', () => {
@@ -937,6 +1484,10 @@ describe('Testing history', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-type');
         });
         test('Pagination with a previous page link', async () => {
             // BUILD
@@ -995,6 +1546,10 @@ describe('Testing history', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-type');
         });
         test('Pagination with a previous page link and a next page link', async () => {
             // BUILD
@@ -1058,6 +1613,10 @@ describe('Testing history', () => {
                     resource: validPatient,
                 },
             ]);
+
+            expect((broker.publish as sinon.SinonStub).callCount).toBe(2);
+            expect((broker.publish as sinon.SinonStub).getCall(0).args[0].operation).toBe('pre-history-type');
+            expect((broker.publish as sinon.SinonStub).getCall(1).args[0].operation).toBe('post-history-type');
         });
     });
 });
